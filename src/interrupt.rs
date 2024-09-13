@@ -1,40 +1,16 @@
 //! Interrupts
 
-#[cfg(cortex_m)]
-use core::arch::asm;
-#[cfg(cortex_m)]
+#[cfg(target_arch = "aarch64")]
+use crate::registers::{Readable, Writeable, DAIF};
+#[cfg(target_arch = "aarch64")]
 use core::sync::atomic::{compiler_fence, Ordering};
 
-/// Trait for enums of external interrupt numbers.
-///
-/// This trait should be implemented by a peripheral access crate (PAC)
-/// on its enum of available external interrupts for a specific device.
-/// Each variant must convert to a u16 of its interrupt number,
-/// which is its exception number - 16.
-///
-/// # Safety
-///
-/// This trait must only be implemented on enums of device interrupts. Each
-/// enum variant must represent a distinct value (no duplicates are permitted),
-/// and must always return the same value (do not change at runtime).
-///
-/// These requirements ensure safe nesting of critical sections.
-pub unsafe trait InterruptNumber: Copy {
-    /// Return the interrupt number associated with this variant.
-    ///
-    /// See trait documentation for safety requirements.
-    fn number(self) -> u16;
-}
-
 /// Disables all interrupts in the current core.
-#[cfg(cortex_m)]
+#[cfg(target_arch = "aarch64")]
 #[inline]
 pub fn disable() {
-    unsafe {
-        asm!("cpsid i", options(nomem, nostack, preserves_flags));
-    }
-
-    // Ensure no subsequent memory accesses are reordered to before interrupts are disabled.
+    compiler_fence(Ordering::SeqCst);
+    DAIF.write(DAIF::I::Masked + DAIF::F::Masked);
     compiler_fence(Ordering::SeqCst);
 }
 
@@ -43,53 +19,19 @@ pub fn disable() {
 /// # Safety
 ///
 /// - Do not call this function inside a critical section.
-#[cfg(cortex_m)]
+#[cfg(target_arch = "aarch64")]
 #[inline]
 pub unsafe fn enable() {
-    // Ensure no preceeding memory accesses are reordered to after interrupts are enabled.
     compiler_fence(Ordering::SeqCst);
-
-    asm!("cpsie i", options(nomem, nostack, preserves_flags));
+    DAIF.write(DAIF::I::Unmasked + DAIF::F::Unmasked);
+    compiler_fence(Ordering::SeqCst);
 }
 
-/// Execute closure `f` with interrupts disabled in the current core.
-///
-/// This method does not synchronise multiple cores and may disable required
-/// interrupts on some platforms; see the `critical-section` crate for a cross-platform
-/// way to enter a critical section which provides a `CriticalSection` token.
-///
-/// This crate provides an implementation for `critical-section` suitable for single-core systems,
-/// based on disabling all interrupts. It can be enabled with the `critical-section-single-core` feature.
-#[cfg(cortex_m)]
+#[cfg(target_arch = "aarch64")]
 #[inline]
-pub fn free<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    let primask = crate::register::primask::read();
-
-    // disable interrupts
-    disable();
-
-    let r = f();
-
-    // If the interrupts were active before our `disable` call, then re-enable
-    // them. Otherwise, keep them disabled
-    if primask.is_active() {
-        unsafe { enable() }
+pub unsafe fn enabled() -> bool {
+    if DAIF.read(DAIF::I) == 0 || DAIF.read(DAIF::F) == 0 {
+        return true;
     }
-
-    r
-}
-
-// Make a `free()` function available to allow checking dependencies without specifying a target,
-// but that will panic at runtime if executed.
-#[doc(hidden)]
-#[cfg(not(cortex_m))]
-#[inline]
-pub fn free<F, R>(_: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    panic!("cortex_m::interrupt::free() is only functional on cortex-m platforms");
+    false
 }

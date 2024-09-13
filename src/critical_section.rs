@@ -2,27 +2,22 @@ use critical_section::{set_impl, Impl, RawRestoreState};
 
 use crate::interrupt;
 
-struct SingleHartCriticalSection;
-set_impl!(SingleHartCriticalSection);
+struct SingleCoreCriticalSection;
+set_impl!(SingleCoreCriticalSection);
 
-unsafe impl Impl for SingleHartCriticalSection {
-    #[cfg(not(feature = "s-mode"))]
+unsafe impl Impl for SingleCoreCriticalSection {
     unsafe fn acquire() -> RawRestoreState {
-        let mut mstatus: usize;
-        core::arch::asm!("csrrci {}, mstatus, 0b1000", out(reg) mstatus);
-        core::mem::transmute::<_, crate::register::mstatus::Mstatus>(mstatus).mie()
-    }
-
-    #[cfg(feature = "s-mode")]
-    unsafe fn acquire() -> RawRestoreState {
-        let mut sstatus: usize;
-        core::arch::asm!("csrrci {}, sstatus, 0b0010", out(reg) sstatus);
-        core::mem::transmute::<_, crate::register::sstatus::Sstatus>(sstatus).sie()
+        let was_active = interrupt::enabled();
+        // NOTE: Fence guarantees are provided by interrupt::disable(), which performs a `compiler_fence(SeqCst)`.
+        interrupt::disable();
+        was_active
     }
 
     unsafe fn release(was_active: RawRestoreState) {
         // Only re-enable interrupts if they were enabled before the critical section.
         if was_active {
+            // NOTE: Fence guarantees are provided by interrupt::enable(), which performs a
+            // `compiler_fence(SeqCst)`.
             interrupt::enable()
         }
     }
